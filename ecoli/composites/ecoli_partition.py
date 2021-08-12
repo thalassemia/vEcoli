@@ -1,18 +1,19 @@
 """
-========================
-E. coli master composite
-========================
+==============================
+E. coli partitioning composite
+==============================
 """
 
 import os
 import argparse
+from copy import deepcopy
 
-import ipdb
 from vivarium.core.composer import Composer
 from vivarium.core.engine import pp, Engine
 from vivarium.plots.topology import plot_topology
 from vivarium.library.topology import assoc_path
 from vivarium.library.dict_utils import deep_merge
+from vivarium.core.process import Process, Deriver
 
 # sim data
 from ecoli.library.sim_data import LoadSimData
@@ -23,14 +24,14 @@ from ecoli.library.logging import make_logging_process
 from ecoli.plots.blame import blame_plot
 
 # vivarium-ecoli processes
-from ecoli.processes.cell_division import Division
 from ecoli.plots.topology import get_ecoli_master_topology_settings
+from ecoli.processes.cell_division import Division
+from ecoli.processes.allocator import Allocator
 
 # state
 from ecoli.states.wcecoli_state import get_state_from_file
 
 from ecoli.library.data_predicates import all_nonnegative
-
 
 RAND_MAX = 2**31
 SIM_DATA_PATH = 'reconstruction/sim_data/kb/simData.cPickle'
@@ -38,6 +39,129 @@ SIM_DATA_PATH = 'reconstruction/sim_data/kb/simData.cPickle'
 MINIMAL_MEDIA_ID = 'minimal'
 AA_MEDIA_ID = 'minimal_plus_amino_acids'
 ANAEROBIC_MEDIA_ID = 'minimal_minus_oxygen'
+
+
+def change_bulk_updater(schema, new_updater):
+    """Retrieve port schemas for all bulk molecules
+    and modify their updater
+
+    Args:
+        schema (Dict): The ports schema to change
+        new_updater (String): The new updater to use
+
+    Returns:
+        Dict: Ports schema that only includes bulk molecules 
+        with the new updater
+    """
+    bulk_schema = {}
+    if '_properties' in schema:
+        if schema['_properties']['bulk']:
+            topo_copy = schema.copy()
+            topo_copy.update({'_updater': new_updater})
+            return topo_copy
+    for port, value in schema.items():
+        if has_bulk_property(value):
+            bulk_schema[port] = change_bulk_updater(value, new_updater)
+    return bulk_schema
+
+def has_bulk_property(schema):
+    """Check to see if a subset of the ports schema contains
+    a bulk molecule using {'_property': {'bulk': True}}
+
+    Args:
+        schema (Dict): Subset of ports schema to check for bulk
+
+    Returns:
+        Bool: Whether the subset contains a bulk molecule
+    """
+    if isinstance(schema, dict):
+        if '_properties' in schema:
+            if schema['_properties']['bulk']:
+                return True
+
+        for value in schema.values():
+            if isinstance(value, dict):
+                if has_bulk_property(value):
+                    return True
+    return False
+
+def get_bulk_topo(topo):
+    """Return topology of only bulk molecules
+    NOTE: Does not work with '_path' key
+
+    Args:
+        topo (Dict): Experiment topology
+
+    Returns:
+        Dict: Experiment topology with non-bulk stores excluded
+    """
+    if 'bulk' in topo:
+        return topo
+    if isinstance(topo, dict):
+        bulk_topo = {}
+        for port, value in topo.items():
+            if path_in_bulk(value):
+                bulk_topo[port] = get_bulk_topo(value)
+    return bulk_topo
+
+def path_in_bulk(topo):
+    """Check whether a subset of the topology is contained within
+    the bulk store
+
+    Args:
+        topo (Dict): Subset of experiment topology
+
+    Returns:
+        Bool: Whether subset contains stores listed under 'bulk'
+    """
+    if 'bulk' in topo:
+        return True
+    if isinstance(topo, dict):
+        for value in topo.values():
+            if path_in_bulk(value):
+                return True
+    return False
+
+
+class Requester(Deriver):
+    defaults = {'process': None}
+
+    def __init__(self, parameters=None):
+        super().__init__(parameters)
+        self.process = self.parameters['process']
+
+    def ports_schema(self):
+        ports = self.process.ports_schema()
+        ports_copy = ports.copy()
+        ports['request'] = change_bulk_updater(ports_copy, 'set')
+        return ports
+
+    def next_update(self, timestep, states):
+        update = self.process.calculate_request(self.parameters['time_step'], states)
+        # Ensure listeners are updated if passed by calculate_request
+        listeners = update.pop('listeners', None)
+        if listeners != None:
+            return {'request': update, 'listeners': listeners}
+        return {'request': update}
+    
+
+
+class Evolver(Process):
+    defaults = {'process': None}
+
+    def __init__(self, parameters=None):
+        super().__init__(parameters)
+        self.process = self.parameters['process']
+
+    def ports_schema(self):
+        ports = self.process.ports_schema()
+        ports_copy = ports.copy()
+        ports['allocate'] = change_bulk_updater(ports_copy, 'set')
+        return ports
+
+    def next_update(self, timestep, states):
+        states = deep_merge(states, states.pop('allocate'))
+        return self.process.evolve_state(timestep, states)
 
 
 class Ecoli(Composer):
@@ -73,7 +197,12 @@ class Ecoli(Composer):
 
     def generate_processes(self, config):
         time_step = config['time_step']
-        parallel = config['parallel']
+        parallel = config['parallel']     
+        
+        process_names = list(config['processes'].keys())
+        process_names.remove('mass')
+        
+        config['processes']['allocator'] = Allocator   
 
         # get the configs from sim_data
         configs = {
@@ -87,44 +216,104 @@ class Ecoli(Composer):
             'two_component_system': self.load_sim_data.get_two_component_system_config(time_step=time_step),
             'equilibrium': self.load_sim_data.get_equilibrium_config(time_step=time_step),
             'protein_degradation': self.load_sim_data.get_protein_degradation_config(time_step=time_step),
-            'metabolism': self.load_sim_data.get_metabolism_config(time_step=time_step),
+            'metabolism': self.load_sim_data.get_metabolism_config(time_step=time_step, deriver_mode=True),
             'chromosome_replication': self.load_sim_data.get_chromosome_replication_config(time_step=time_step),
             'mass': self.load_sim_data.get_mass_listener_config(time_step=time_step),
             'mrna_counts': self.load_sim_data.get_mrna_counts_listener_config(time_step=time_step),
+            'allocator': self.load_sim_data.get_allocator_config(time_step=time_step, process_names=process_names)
         }
 
         # make the processes
         processes = {
-            process_name: (process(configs[process_name])
-                           if not config['blame']
-                           else make_logging_process(process)(configs[process_name]))
+            process_name: process(configs[process_name])
             for (process_name, process) in config['processes'].items()
+            if process_name not in [
+                'polypeptide_elongation'
+                # TODO: get this working again
+            ]
         }
-
+        
+        derivers = ['metabolism', 'mass', 'mrna_counts', 'allocator']
+        
+        # make the requesters
+        requesters = {
+            f'{process_name}_requester': Requester({'time_step': time_step,
+                                                    'process': process})
+            for (process_name, process) in processes.items()
+            if process_name not in derivers
+        }
+        
+        # make the evolvers
+        evolvers = {
+            f'{process_name}_evolver': Evolver({'time_step': time_step,
+                                                'process': process})
+                if not config['blame']
+                else make_logging_process(Evolver)({'time_step': time_step,
+                                                    'process': process})
+            for (process_name, process) in processes.items()
+            if process_name not in derivers
+        }
+        
+        if config['blame']:
+            processes['metabolism'] = make_logging_process(
+                config['processes']['metabolism'])(configs['metabolism'])
+        else:
+            processes['metabolism'] = config['processes']['metabolism'](configs['metabolism'])
+        
+        division = {}
         # add division
         if self.config['divide']:
             division_config = dict(
                 config['division'],
                 agent_id=self.config['agent_id'],
                 composer=self)
-            processes['division'] = Division(division_config)
+            division = {'division': Division(division_config)}
+            
+        allocator = {'allocator': processes['allocator']}
+        mass = {'mass': processes['mass']}
+        metabolism = {'metabolism': processes['metabolism']}
 
-        return processes
+        all_procs = {**requesters, **allocator, **evolvers, **metabolism, **division, **mass}
+        
+        return all_procs
 
     def generate_topology(self, config):
         topology = {}
+        
+        derivers = ['metabolism', 'mass', 'allocator']
 
         # make the topology
         for process_id, ports in config['topology'].items():
-            topology[process_id] = ports
-            if config['blame']:
-                topology[process_id]['log_update'] = ('log_update', process_id,)
+            if process_id not in derivers:
+                topology[f'{process_id}_requester'] = deepcopy(ports)
+                topology[f'{process_id}_evolver'] = deepcopy(ports)
+                if config['blame']:
+                    topology[f'{process_id}_evolver']['log_update'] = ('log_update', process_id,)
+                bulk_topo = get_bulk_topo(ports)
+                topology[f'{process_id}_requester']['request'] = {
+                    '_path': ('bulk', 'request', process_id,),
+                    **bulk_topo}
+                topology[f'{process_id}_evolver']['allocate'] = {
+                    '_path': ('bulk', 'allocate', process_id,),
+                    **bulk_topo}
 
         # add division
         if self.config['divide']:
             topology['division'] = {
                 'variable': ('listeners', 'mass', 'cell_mass'),
                 'agents': config['agents_path']}
+            
+        topology['allocator'] = {
+            'request': ('bulk', 'request',),
+            'allocate': ('bulk', 'allocate',),
+            'bulk': ('bulk',)}
+        
+        topology['mass'] = config['topology']['mass']
+        
+        topology['metabolism'] = config['topology']['metabolism']
+        
+        if config['blame']:
+            topology['metabolism']['log_update'] = ('log_update', 'metabolism',)
 
         return topology
 
@@ -135,7 +324,6 @@ def run_ecoli(
         divide=False,
         progress_bar=True,
         blame=False,
-        time_series=True
 ):
     """Run ecoli_master simulations
 
@@ -153,7 +341,7 @@ def run_ecoli(
         'agent_id': agent_id,
         # TODO -- remove schema override once values don't go negative
         '_schema': {
-            'equilibrium': {
+            'equilibrium_evolver': {
                 'molecules': {
                     'PD00413[c]': {'_updater': 'nonnegative_accumulate'}
                 }
@@ -186,17 +374,14 @@ def run_ecoli(
         'emit_config': False,
         # Not emitting every step is faster but breaks blame.py
         #'emit_step': 1000,
-        #'emitter': 'database
+        #'emitter': 'database'
     })
 
     # run the experiment
     ecoli_experiment.update(total_time)
 
     # retrieve the data
-    if time_series:
-        output = ecoli_experiment.emitter.get_timeseries()
-    else:
-        output = ecoli_experiment.emitter.get_data()
+    output = ecoli_experiment.emitter.get_timeseries()
 
     return output
 
