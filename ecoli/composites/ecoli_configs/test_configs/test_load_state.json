@@ -13,9 +13,9 @@
     "seed": 0,
     "partition": true,
 
-    "initial_time": "wcecoli_t0",
+    "initial_time": "vivecoli_t2",
     "time_step": 2.0,
-    "total_time": 100.0,
+    "total_time": 2.0,
     "generations": null,
 
     "agent_id": "0",
@@ -27,7 +27,7 @@
     "divide": false,
 
     "save": false,
-    "save_times": [10, 100, 1000],
+    "save_times": [2],
 
     "add_processes" : [],
     "exclude_processes" : [],
