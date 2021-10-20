@@ -136,17 +136,9 @@ class Ecoli(Composer):
                              # and not process.is_deriver()
                              )]
 
-        # update schema overrides for evolvers and requesters
-        update_override = {}
-        delete_override = []
-        for process_id, override in self.schema_override.items():
-            if process_id in self.partitioned_processes:
-                delete_override.append(process_id)
-                update_override[f'{process_id}_evolver'] = override
-                update_override[f'{process_id}_requester'] = override
-        for process_id in delete_override:
-            del self.schema_override[process_id]
-        self.schema_override.update(update_override)
+        # Update schema overrides to reflect name change for requesters/evolvers
+        self.schema_override = {f'{p}_evolver': v for p, v in self.schema_override.items()
+                                if p not in self.partitioned_processes}
 
         # make the requesters
         requesters = {
@@ -251,12 +243,10 @@ class Ecoli(Composer):
 
 
 def run_ecoli(
-        filename='default',
         total_time=10,
         divide=False,
         progress_bar=True,
         log_updates=False,
-        emitter='timeseries',
 ):
     """Run ecoli_master simulations
 
@@ -269,12 +259,11 @@ def run_ecoli(
     """
     from ecoli.experiments.ecoli_master_sim import EcoliSim, CONFIG_DIR_PATH
 
-    sim = EcoliSim.from_file(CONFIG_DIR_PATH + filename + '.json')
+    sim = EcoliSim.from_file(CONFIG_DIR_PATH + "default.json")
     sim.total_time = total_time
     sim.divide = divide
     sim.progress_bar = progress_bar
     sim.log_updates = log_updates
-    sim.emitter = emitter
 
     return sim.run()
 
@@ -282,7 +271,7 @@ def run_ecoli(
 @pytest.mark.slow
 def run_division(
         agent_id='1',
-        total_time=30
+        total_time=60
 ):
     """
     Work in progress to get division working
@@ -349,7 +338,7 @@ def ecoli_topology_plot(config={}):
     topo_plot = plot_topology(
         ecoli,
         filename='topology',
-        out_dir='out/composites/ecoli_master',
+        out_dir='out/composites/ecoli_partition',
         settings=settings
     )
     return topo_plot
@@ -363,6 +352,6 @@ test_library = {
 }
 
 # run experiments in test_library from the command line with:
-# python ecoli/composites/ecoli_master.py -n [experiment id]
+# python ecoli/composites/ecoli_partition.py -n [experiment id]
 if __name__ == '__main__':
     run_library_cli(test_library)
