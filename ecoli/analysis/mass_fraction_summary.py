@@ -25,13 +25,15 @@ COLORS = [
 
 class Plot:
 
-    def __init__(self, data):
+    def __init__(self, data, sim_data=None, out_dir='out/analysis'):
         self.data = data
+        self.out_dir = out_dir
+        os.makedirs(self.out_dir, exist_ok=True)
         self.do_plot(self.data)
 
     def do_plot(self, data):
-        mass = TableReader("Mass", self.data)
-        main_reader = TableReader("Main", self.data)
+        mass = TableReader("Mass", data)
+        main_reader = TableReader("Main", data)
 
         cell = mass.readColumn("dryMass")
         protein = mass.readColumn("proteinMass")
@@ -40,8 +42,8 @@ class Plot:
         mRna = mass.readColumn("mRnaMass")
         dna = mass.readColumn("dnaMass")
         smallMolecules = mass.readColumn("smallMoleculeMass")
-        time_tb = TableReader("Main", data)
-        time_vals = time_tb.readColumn('time')
+
+        time_vals = main_reader.readColumn('time')
         #need to # FIX intial time calculation maybe
         initialTime = time_vals[0]
         #initialTime = main_reader.readAttribute("initialTime")
@@ -75,13 +77,9 @@ class Plot:
         plt.ylabel("Mass (normalized by t = 0 min)")
         plt.legend(legend, loc="best")
 
+        # TODO -- this can go into a general method in an analysis base class
         plt.tight_layout()
-        out_dir = 'out/analysis/'
-        os.makedirs(out_dir, exist_ok=True)
-        plt.savefig(out_dir + 'massFractionSummary.png')
-
-        #todo make analysis tools
-        #this is from WCEcoli: exportFigure(plt, "ecoli/analysis/seriesOut", "massfractionSummary")
+        plt.savefig(os.path.join(self.out_dir, 'mass_fraction_summary.png'))
         plt.close("all")
         return fig
 
@@ -93,6 +91,6 @@ def run_plot():
     Plot(data)
 
 
-# python ecoli/analysis/massFractionSummary.py
+# python ecoli/analysis/mass_fraction_summary.py
 if __name__ == "__main__":
     run_plot()
