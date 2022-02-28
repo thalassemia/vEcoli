@@ -1,22 +1,19 @@
 {
-    "inherit_from": null,
     "experiment_id" : null,
     "suffix_time" : true,
     "description" : "",
     "progress_bar" : true,
     "sim_data_path": "reconstruction/sim_data/kb/simData.cPickle",
     "emitter" : "timeseries",
-    "emitter_arg": [
-    ],
     "emit_topology" : true,
     "emit_processes" : false,
     "emit_config" : false,
     "log_updates" : false,
-    "raw_output" : true,
+    "raw_output" : false,
     "seed": 0,
     "partition": true,
 
-    "initial_state_file": "wcecoli_t0",
+    "initial_time": "wcecoli_t0",
     "time_step": 2.0,
     "total_time": 100.0,
     "generations": null,
@@ -28,19 +25,18 @@
     "division": {
         "threshold": 2220},
     "divide": false,
-    "spatial_environment": false,
-    "spatial_environment_config": {},
 
     "save": false,
-    "save_times": [2, 10, 100, 1000, 2678],
+    "save_times": [10, 100, 1000],
 
     "add_processes" : [],
-    "exclude_processes" : [],
+    "exclude_processes" : [
+        "ecoli-metabolism"
+    ],
     "swap_processes" : {},
-    "profile": false,
     "processes": [
         "ecoli-chromosome-structure",
-        "ecoli-metabolism",
+        "ecoli-metabolism-gradient-descent",
         "ecoli-tf-binding",
         "ecoli-transcript-initiation",
         "ecoli-transcript-elongation",
@@ -53,10 +49,13 @@
         "ecoli-protein-degradation",        
         "ecoli-chromosome-replication",
         "ecoli-mass-listener",
-        "mRNA_counts_listener",
-        "monomer_counts_listener"
+        "mRNA_counts_listener"
     ],
-    "process_configs": {},
-    "topology": {},
-    "_schema": {}
+    "process_configs": {
+        "ecoli-chromosome-structure" :{
+            "deriver_mode" : true
+        }
+    },
+    "topology": {
+    }
 }
